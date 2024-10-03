@@ -3,6 +3,7 @@ import sys
 
 from app.metainfo import MetaInfoFile
 from app.bencoding import decode_bencode
+from app.requests import fetch_peers
 
 
 def main():
@@ -25,12 +26,17 @@ def main():
         file_path = sys.argv[2]
         meta_info_file = MetaInfoFile(file_path)
         meta_info = meta_info_file.info
-        print(f"Tracker URL: {str(meta_info_file.announce, "utf-8")}")
+        print(f"Tracker URL: {meta_info_file.announce}")
         print(f"Length: {meta_info.length}")
         print(f"Info Hash: {meta_info.sha1_hash().hex()}")
         print(f"Piece Length: {meta_info.piece_length}")
         pieces_hex = [p.hex() for p in meta_info.pieces]
         print(f"Piece Hashes:\n{'\n'.join(pieces_hex)}")
+    elif command == "peers":
+        file_path = sys.argv[2]
+        meta_info_file = MetaInfoFile(file_path)
+        peers = fetch_peers(meta_info_file)
+        print("\n".join(peers.peers_urls()))
     else:
         raise NotImplementedError(f"Unknown command {command}")
 

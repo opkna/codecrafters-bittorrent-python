@@ -6,7 +6,7 @@ from app.bencoding import decode_bencode, encode_bencode
 class MetaInfo:
     def __init__(self, info: dict) -> None:
         self.length: int = info["length"]
-        self.name: str = info["name"]
+        self.name: str = str(info["name"], "utf-8")
         self.piece_length: int = info["piece length"]
         self.pieces: list[bytes] = []
         pieces_b: bytes = info["pieces"]
@@ -26,5 +26,5 @@ class MetaInfoFile:
             bencoded_data = f.read()
 
         data = decode_bencode(bencoded_data)
-        self.announce: str = data["announce"]
+        self.announce: str = str(data["announce"], "utf-8")
         self.info = MetaInfo(data["info"])
