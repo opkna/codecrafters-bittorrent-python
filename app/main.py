@@ -22,15 +22,15 @@ def _decode_bencode_impl(input: bytes, start_idx: int) -> tuple[Any, int]:
     if prefix == BYTE_I:
         # i123e
         end_idx = input.index(BYTE_E, start_idx + 2)
-        value = int(input[start_idx + 1 : end_idx])
-        return (value, end_idx + 1)
+        int_value = int(input[start_idx + 1 : end_idx])
+        return (int_value, end_idx + 1)
     elif BYTE_0 <= prefix <= BYTE_9:
         # 3:abc
         col_idx = input.index(BYTE_COL, start_idx + 1)
         length = int(input[start_idx : col_idx])
         end_idx = col_idx + 1 + length
-        value = str(input[col_idx + 1 : end_idx], "utf-8")
-        return (value, end_idx)
+        str_value = str(input[col_idx + 1 : end_idx], "utf-8")
+        return (str_value, end_idx)
     elif prefix == BYTE_L:
         idx = start_idx + 1
         list_value = []
@@ -39,6 +39,15 @@ def _decode_bencode_impl(input: bytes, start_idx: int) -> tuple[Any, int]:
             list_value.append(value)
             idx = next_idx
         return (list_value, idx + 1)
+    elif prefix == BYTE_D:
+        idx = start_idx + 1
+        dict_value = {}
+        while input[idx] != BYTE_E:
+            key, next_idx = _decode_bencode_impl(input, idx)
+            value, next_idx = _decode_bencode_impl(input, next_idx)
+            dict_value[key] = value
+            idx = next_idx
+        return (dict_value, idx + 1)
     else:
         raise RuntimeError(f"Unknown prefix '{chr(prefix)}'")
 
