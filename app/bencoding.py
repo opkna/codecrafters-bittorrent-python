@@ -1,3 +1,4 @@
+from itertools import chain
 from typing import Any
 
 
@@ -10,7 +11,7 @@ BYTE_9 = ord(b"9")
 BYTE_COL = ord(b":")
 
 
-def decode_bencode(bencoded_value):
+def decode_bencode(bencoded_value: bytes) -> int | bytes | list | dict:
     return _decode_bencode_impl(bencoded_value, 0)[0]
 
 
@@ -50,4 +51,26 @@ def _decode_bencode_impl(
             idx = next_idx
         return (dict_value, idx + 1)
     else:
-        raise RuntimeError(f"Unknown prefix '{chr(prefix)}'")
+        raise ValueError(f"Unknown prefix '{chr(prefix)}'")
+
+
+def encode_bencode(value: int | bytes | str | list | dict) -> bytes:
+    if isinstance(value, int):
+        return f"i{value}e".encode()
+    elif isinstance(value, bytes):
+        return f"{len(value)}:".encode() + value
+    elif isinstance(value, str):
+        return f"{len(value)}:{value}".encode()
+    elif isinstance(value, list):
+        result = b"l"
+        for item in value:
+            result += encode_bencode(item)
+        return result + b"e"
+    elif isinstance(value, dict):
+        result = b"d"
+        for key, item_value in value.items():
+            result += encode_bencode(key)
+            result += encode_bencode(item_value)
+        return result + b"e"
+    else:
+        raise TypeError(f"Can't bencode type {type(value)}")

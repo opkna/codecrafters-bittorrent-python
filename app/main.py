@@ -17,15 +17,17 @@ def main():
         def bytes_to_str(data):
             if isinstance(data, bytes):
                 return data.decode()
-
             raise TypeError(f"Type not serializable: {type(data)}")
 
         print(json.dumps(decode_bencode(bencoded_value), default=bytes_to_str))
+
     elif command == "info":
         file_path = sys.argv[2]
         meta_info_file = MetaInfoFile(file_path)
+        meta_info = meta_info_file.info
         print(f"Tracker URL: {str(meta_info_file.announce, "utf-8")}")
-        print(f"Length: {meta_info_file.info.length}")
+        print(f"Length: {meta_info.length}")
+        print(f"Info Hash: {meta_info.sha1_hash().hex()}")
     else:
         raise NotImplementedError(f"Unknown command {command}")
 

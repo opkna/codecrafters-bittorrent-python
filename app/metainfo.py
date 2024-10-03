@@ -1,4 +1,5 @@
-from app.bencoding import decode_bencode
+from hashlib import sha1
+from app.bencoding import decode_bencode, encode_bencode
 
 
 class MetaInfo:
@@ -6,7 +7,12 @@ class MetaInfo:
         self.length: int = info["length"]
         self.name: str = info["name"]
         self.piece_length: int = info["piece length"]
-        self.pieces: list[str] = info["pieces"]
+        self.pieces: bytes = info["pieces"]
+
+        self._info_dict = info
+
+    def sha1_hash(self):
+        return sha1(encode_bencode(self._info_dict)).digest()
 
 
 class MetaInfoFile:
