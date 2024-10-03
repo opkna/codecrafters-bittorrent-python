@@ -1,21 +1,46 @@
 import json
 import sys
+from typing import Any
 
-# import bencodepy - available if you need it!
-# import requests - available if you need it!
+BYTE_I = ord(b"i")
+BYTE_L = ord(b"l")
+BYTE_D = ord(b"d")
+BYTE_E = ord(b"e")
+BYTE_0 = ord(b"0")
+BYTE_9 = ord(b"9")
+BYTE_COL = ord(b":")
 
-# Examples:
-#
+
 # - decode_bencode(b"5:hello") -> b"hello"
 # - decode_bencode(b"10:hello12345") -> b"hello12345"
 def decode_bencode(bencoded_value):
-    if chr(bencoded_value[0]).isdigit():
-        first_colon_index = bencoded_value.find(b":")
-        if first_colon_index == -1:
-            raise ValueError("Invalid encoded value")
-        return bencoded_value[first_colon_index+1:]
+    return _decode_bencode_impl(bencoded_value, 0)[0]
+
+
+def _decode_bencode_impl(input: bytes, start_idx: int) -> tuple[Any, int]:
+    prefix = input[start_idx]
+    if prefix == BYTE_I:
+        # i123e
+        end_idx = input.index(BYTE_E, start_idx + 2)
+        value = int(input[start_idx + 1 : end_idx])
+        return (value, end_idx + 1)
+    elif BYTE_0 <= prefix <= BYTE_9:
+        # 3:abc
+        col_idx = input.index(BYTE_COL, start_idx + 1)
+        length = int(input[start_idx : col_idx])
+        end_idx = col_idx + 1 + length
+        value = str(input[col_idx + 1 : end_idx], "utf-8")
+        return (value, end_idx)
+    elif prefix == BYTE_L:
+        idx = start_idx + 1
+        list_value = []
+        while input[idx] != BYTE_E:
+            value, next_idx = _decode_bencode_impl(input, idx)
+            list_value.append(value)
+            idx = next_idx
+        return (list_value, idx + 1)
     else:
-        raise NotImplementedError("Only strings are supported at the moment")
+        raise RuntimeError(f"Unknown prefix '{chr(prefix)}'")
 
 
 def main():
