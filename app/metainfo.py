@@ -1,4 +1,5 @@
 from hashlib import sha1
+from itertools import batched
 from app.bencoding import decode_bencode, encode_bencode
 
 
@@ -7,7 +8,11 @@ class MetaInfo:
         self.length: int = info["length"]
         self.name: str = info["name"]
         self.piece_length: int = info["piece length"]
-        self.pieces: bytes = info["pieces"]
+        self.pieces: list[bytes] = []
+        pieces_b: bytes = info["pieces"]
+        assert len(pieces_b) % 20 == 0
+        for i in range(0, len(pieces_b), 20):
+            self.pieces.append(pieces_b[i : i + 20])
 
         self._info_dict = info
 

@@ -28,6 +28,9 @@ def main():
         print(f"Tracker URL: {str(meta_info_file.announce, "utf-8")}")
         print(f"Length: {meta_info.length}")
         print(f"Info Hash: {meta_info.sha1_hash().hex()}")
+        print(f"Piece Length: {meta_info.piece_length}")
+        pieces_hex = [p.hex() for p in meta_info.pieces]
+        print(f"Piece Hashes:\n{'\n'.join(pieces_hex)}")
     else:
         raise NotImplementedError(f"Unknown command {command}")
 
