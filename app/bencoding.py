@@ -1,7 +1,3 @@
-from itertools import chain
-from typing import Any
-
-
 BYTE_I = ord(b"i")
 BYTE_L = ord(b"l")
 BYTE_D = ord(b"d")

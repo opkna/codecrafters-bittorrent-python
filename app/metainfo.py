@@ -1,5 +1,5 @@
+from dataclasses import dataclass
 from hashlib import sha1
-from itertools import batched
 from app.bencoding import decode_bencode, encode_bencode
 
 
@@ -16,15 +16,19 @@ class MetaInfo:
 
         self._info_dict = info
 
-    def sha1_hash(self):
+    def get_info_hash(self):
         return sha1(encode_bencode(self._info_dict)).digest()
 
 
+@dataclass
 class MetaInfoFile:
-    def __init__(self, file_path: str):
+    announce: str
+    info: MetaInfo
+
+    @classmethod
+    def from_file(cls, file_path: str) -> "MetaInfoFile":
         with open(file_path, "rb") as f:
             bencoded_data = f.read()
 
         data = decode_bencode(bencoded_data)
-        self.announce: str = str(data["announce"], "utf-8")
-        self.info = MetaInfo(data["info"])
+        return cls(str(data["announce"], "utf-8"), MetaInfo(data["info"]))
