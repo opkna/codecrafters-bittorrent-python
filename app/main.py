@@ -1,19 +1,77 @@
+from argparse import ArgumentParser
 from json import dumps
-from re import compile
+from pathlib import Path
 from sys import argv
+from typing import Literal, TypedDict, cast
 
+from app.bittorrent_proto import PeerConnection
 from app.communication import Address
 from app.metainfo import MetaInfoFile
 from app.bencoding import decode_bencode
-from app.requests import fetch_peers, handshake
+from app.requests import download_piece, fetch_peers
 
-PEER_ID = "00112233445566778899"
+PEER_ID = b"00112233445566778899"
+
+
+class DecodeArgs(TypedDict):
+    command: Literal["decode"]
+    bencoded_string: str
+
+
+class InfoArgs(TypedDict):
+    command: Literal["info"]
+    torrent_file: str
+
+
+class PeersArgs(TypedDict):
+    command: Literal["peers"]
+    torrent_file: str
+
+
+class HandshakeArgs(TypedDict):
+    command: Literal["handshake"]
+    torrent_file: str
+    peer_ip_port: str
+
+
+class DownloadPieceArgs(TypedDict):
+    command: Literal["download_piece"]
+    torrent_file: str
+    index: int
+    output: str | None
+
+
+Args = DecodeArgs | InfoArgs | PeersArgs | HandshakeArgs | DownloadPieceArgs
+
+
+def parse_args(
+    args: list[str],
+) -> Args:
+    parser = ArgumentParser("my_bittorrent")
+    cmds = parser.add_subparsers(dest="command", required=True)
+    decode = cmds.add_parser("decode")
+    decode.add_argument("bencoded_string", type=str)
+    info = cmds.add_parser("info")
+    info.add_argument("torrent_file", type=str)
+    peers = cmds.add_parser("peers")
+    peers.add_argument("torrent_file", type=str)
+    handshake = cmds.add_parser("handshake")
+    handshake.add_argument("torrent_file", type=str)
+    handshake.add_argument("peer_ip_port", type=str)
+    download_piece = cmds.add_parser("download_piece")
+    download_piece.add_argument("torrent_file", type=str)
+    download_piece.add_argument("index", type=int)
+    download_piece.add_argument("-o", "--output", type=str)
+
+    ns = parser.parse_args(args)
+    args = {k: v for k, v in ns._get_kwargs()}
+    return cast(Args, args)
 
 
 def main():
-    command = argv[1]
-    if command == "decode":
-        bencoded_value = argv[2].encode()
+    args = parse_args(argv[1:])
+    if args["command"] == "decode":
+        bencoded_value = args["bencoded_string"].encode()
 
         # json.dumps() can't handle bytes, but bencoded "strings" need to be
         # bytestrings since they might contain non utf-8 characters.
@@ -25,9 +83,8 @@ def main():
             raise TypeError(f"Type not serializable: {type(data)}")
 
         print(dumps(decode_bencode(bencoded_value), default=bytes_to_str))
-
-    elif command == "info":
-        meta_info_file = MetaInfoFile.from_file(argv[2])
+    elif args["command"] == "info":
+        meta_info_file = MetaInfoFile.from_file(args["torrent_file"])
         meta_info = meta_info_file.info
 
         print(f"Tracker URL: {meta_info_file.announce}")
@@ -37,21 +94,39 @@ def main():
         pieces_hex = [p.hex() for p in meta_info.pieces]
         print(f"Piece Hashes:\n{'\n'.join(pieces_hex)}")
 
-    elif command == "peers":
-        meta_info_file = MetaInfoFile.from_file(argv[2])
+    elif args["command"] == "peers":
+        meta_info_file = MetaInfoFile.from_file(args["torrent_file"])
 
         peers = fetch_peers(PEER_ID, meta_info_file)
         print("\n".join(repr(a) for a in peers.addresses))
 
-    elif command == "handshake":
-        meta_info_file = MetaInfoFile.from_file(argv[2])
-        address = Address.from_str(argv[3])
+    elif args["command"] == "handshake":
+        meta_info_file = MetaInfoFile.from_file(args["torrent_file"])
+        address = Address.from_str(args["peer_ip_port"])
         info_hash = meta_info_file.info.get_info_hash()
 
-        result = handshake(PEER_ID, address, info_hash)
-        print(f"Peer ID: {result.peer_id.hex()}")
+        result = PeerConnection(
+            address, meta_info_file.info, PEER_ID, only_handshake=True
+        )
+        print(f"Peer ID: {result.handshake.peer_id.hex()}")
+    elif args["command"] == "download_piece":
+        meta_info_file = MetaInfoFile.from_file(args["torrent_file"])
+        index = args["index"]
+        output_file = Path(args["output"] or f"./piece-{index}").resolve()
+
+        peers = fetch_peers(PEER_ID, meta_info_file)
+        address = peers.addresses[1]
+        info_hash = meta_info_file.info.get_info_hash()
+        meta_info_file.info.piece_length
+        download_piece(
+            peer_id=PEER_ID,
+            addresses=peers.addresses,
+            meta_info=meta_info_file.info,
+            index=index,
+            output_file=output_file,
+        )
     else:
-        raise NotImplementedError(f"Unknown command {command}")
+        raise NotImplementedError(f"Unknown command {args['command']}")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,8 @@
-from struct import iter_unpack, unpack
-from typing import Generator, Iterable, NamedTuple, cast
+from contextlib import contextmanager
+from io import BufferedRWPair
+from socket import AddressFamily, SocketKind, socket
+from struct import iter_unpack
+from typing import Any, Generator
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -15,20 +18,6 @@ class Address(tuple):
 
     def __repr__(self) -> str:
         return f"{self[0]}:{self[1]}"
-
-    @property
-    def ip(self) -> bytes:
-        return self[0]
-
-    @property
-    def port(self) -> int:
-        return self[1]
-
-    @classmethod
-    def from_bytes(cls, data: bytes) -> "Address":
-        assert len(data) == 6
-        ip, port = unpack(cls._STRUCT_FORMAT, data)
-        return cls(ip, port)
 
     @classmethod
     def from_bytes_to_many(cls, data: bytes) -> Generator["Address", None, None]:
@@ -59,5 +48,13 @@ def get_request(base_url: str, query: dict | None = None):
         with urlopen(request) as res:
             return res.read()
     except HTTPError as err:
-        print(f"Failed request to {url}")
+        print(f"Failed request to {url}: {err}")
         raise
+
+
+@contextmanager
+def socket_request_rw(address: Address) -> Generator[BufferedRWPair, None, None]:
+    with socket(AddressFamily.AF_INET, SocketKind.SOCK_STREAM) as s:
+        s.connect(address)
+        with s.makefile("brw", buffering=1) as io:
+            yield io
