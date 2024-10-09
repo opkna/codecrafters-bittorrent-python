@@ -196,8 +196,8 @@ def _start_worker(address: Address, info: MetaInfo, peer_id: bytes, queue: Queue
                     return
                 _fetch_piece(conn, piece)
                 piece = None
-    except (ValueError, ConnectionError):
-        pass
+    except (ValueError, ConnectionError) as exc:
+        print(f"{exc.__class__.__name__}: {exc}")
     finally:
         if piece:
             queue.put_nowait(piece)
