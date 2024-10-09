@@ -1,17 +1,13 @@
-from dataclasses import dataclass
-from itertools import batched
-from math import ceil
-from multiprocessing import Process
-from multiprocessing.connection import Connection, Pipe
+from hashlib import file_digest, sha1
+from itertools import batched, chain
+from multiprocessing import Process, Queue
 from pathlib import Path
-from typing import Literal, cast
+from shutil import copyfileobj
+from time import sleep
+from typing import cast
 
 from app.bencoding import decode_bencode
-from app.bittorrent_proto import (
-    PeerConnection,
-    PieceMsg,
-    RequestMsg,
-)
+from app.bittorrent_proto import PeerConnection, PieceMsg, RequestMsg
 from app.communication import Address, get_request
 from app.metainfo import MetaInfo, MetaInfoFile
 
@@ -45,230 +41,171 @@ def fetch_peers(peer_id: bytes, meta_info_file: MetaInfoFile) -> PeersResponse:
     return PeersResponse(data)
 
 
-###########
-# Sockets #
-###########
+class PieceInfo:
+    def __init__(self, info: MetaInfo, peer_id: bytes, index: int, file_path: Path):
+        self.peer_id = peer_id
+        self.index = index
+        self.file_path = file_path
+        self.hash = info.pieces[index]
+        self.begin = info.piece_length * index
+        self.length = min(info.piece_length, info.length - self.begin)
+
+    def get_requests(self, block_size: int):
+        next_block = 0
+        requests: list[RequestMsg] = []
+        while next_block < self.length:
+            block_length = min(block_size, self.length - next_block)
+            requests.append(RequestMsg(self.index, next_block, block_length))
+            next_block += block_length
+
+        return requests
 
 
 def download_piece(
     peer_id: bytes,
     addresses: list[Address],
-    meta_info: MetaInfo,
+    info: MetaInfo,
     index: int,
-    output_file: Path,
+    output_file: Path | None,
 ):
-    return _Downloader(peer_id, addresses, meta_info, index).download(output_file)
+    piece_file = output_file.with_name(output_file.name + f".{index}")
+    piece = PieceInfo(info, peer_id, index, piece_file)
+    downloader = _Downloader(addresses, info, peer_id, [piece])
+    downloader.download(output_file)
 
 
-@dataclass(slots=True)
-class Proc:
-    proc: Process
-    pipe_main: Connection
-    pipe_proc: Connection
-    status: Literal["uninit", "ready", "working", "dead"] = "uninit"
-    batch: list[RequestMsg] | None = None
+def download(
+    peer_id: bytes,
+    addresses: list[Address],
+    info: MetaInfo,
+    output_file: Path | None,
+):
 
-    def start(self):
-        assert self.proc.pid is None
-        self.proc.start()
-        self.status = "ready"
+    pieces: list[PieceInfo] = []
+    for index in range(len(info.pieces)):
+        piece_file = output_file.with_name(output_file.name + f".{index}")
+        pieces.append(PieceInfo(info, peer_id, index, piece_file))
 
-    def __bool__(self):
-        return self.status != "dead"
+    downloader = _Downloader(addresses, info, peer_id, pieces)
+    downloader.download(output_file)
 
 
 class _Downloader:
-    BLOCK_SIZE = 16 * 1024
-    BATCH_SIZE = 1
-
     def __init__(
         self,
-        peer_id: bytes,
         addresses: list[Address],
-        meta: MetaInfo,
-        index: int,
+        info: MetaInfo,
+        peer_id: bytes,
+        pieces: list[PieceInfo],
     ) -> None:
-        self._peer_id = peer_id
-        self._addresses = addresses
-        self._meta_info = meta
-        self._index = index
-        self._errors: list[Exception] = []
+        self.addresses = addresses
+        self.info = info
+        self.peer_id = peer_id
+        self.pieces = pieces
+        self.done_pieces: list[PieceInfo | None] = [None] * len(pieces)
 
-        # Create all requests
-        num_pieces = len(meta.pieces)
-        if index < 0 or index >= num_pieces:
-            raise ValueError(f"index out of range {index}")
-
-        piece_begin = meta.piece_length * index
-        piece_length = min(piece_begin + meta.piece_length, meta.length) - piece_begin
-
-        self._num_blocks = ceil(piece_length / self.BLOCK_SIZE)
-        requests: list[RequestMsg] = []
-        self._blocks: list[PieceMsg] = []
-        for i in range(self._num_blocks):
-            begin = i * self.BLOCK_SIZE
-            length = min(self.BLOCK_SIZE, piece_length - begin)
-            requests.append(RequestMsg(index, begin, length))
-        self._batches = list(batched(requests, self.BATCH_SIZE))
-
-        # Create processes
-        self._procs: list[Proc] = []
-        for address in self._addresses:
-            pipe_main, pipe_proc = Pipe()
-            self._procs.append(
-                Proc(
-                    proc=Process(
-                        name=repr(address),
-                        target=_start_conn,
-                        args=(
-                            address,
-                            self._meta_info,
-                            self._peer_id,
-                            pipe_main,
-                            pipe_proc,
-                        ),
-                    ),
-                    pipe_main=pipe_main,
-                    pipe_proc=pipe_proc,
-                )
-            )
-
-    def get_batch(self) -> list[RequestMsg] | None:
-        if self._batches:
-            return self._batches.pop(0)
-        else:
-            return None
-
-    def _validate_proc(self, proc: Proc) -> bool:
-        if proc.status == "dead":
-            return False
-
-        if (
-            proc.proc.is_alive()
-            and not proc.pipe_main.closed
-            and not proc.pipe_proc.closed
-        ):
-            return True
-
-        self._end_proc(proc)
-        return False
-
-    def _handle_uninit(self, proc: Proc):
-        assert proc.status == "uninit"
-        if len(self._batches) > 0:
-            proc.start()
-            self._handle_ready(proc)
-
-    def _handle_ready(self, proc: Proc):
-        assert proc.status == "ready"
-        if not self._validate_proc(proc):
-            return
-
-        if batch := self.get_batch():
-            proc.pipe_main.send(batch)
-            proc.batch = batch
-            proc.status = "working"
-
-    def _handle_working(self, proc: Proc):
-        assert proc.status == "working"
-        if not self._validate_proc(proc):
-            return
-
+    def download(self, output_file: Path):
+        queue_size = max(len(self.pieces), len(self.addresses))
+        queue = Queue(queue_size)
+        processes: list[Process] = []
         try:
-            result = cast(list[PieceMsg] | None | Exception, proc.pipe_main.recv())
-        except (EOFError, ConnectionResetError):
-            self._end_proc(proc)
-            return
+            for piece in self.pieces:
+                queue.put_nowait(piece)
 
-        if isinstance(result, Exception):
-            self._errors.append(result)
-            self._end_proc(proc)
-            return
+            for address in self.addresses:
+                process = self._create_process(address, queue)
+                process.start()
+                processes.append(process)
 
-        if result is None:
-            self._end_proc(proc)
-            return
+            while not all(self.done_pieces):
+                self._check_processes(processes)
+                self._check_pieces()
+        finally:
+            for _ in range(len(processes)):
+                queue.put(None)
+            for process in processes:
+                process.join()
+                process.close()
+            queue.close()
 
-        self._blocks.extend(result)
-        proc.batch = None
-        proc.status = "ready"
-        self._handle_ready(proc)
+        self._combine_file(output_file)
 
-    def _end_proc(self, proc: Proc):
-        assert proc.status != "dead"
-        if proc.batch:
-            self._batches.append(proc.batch)
-            proc.batch = None
+    def _create_process(self, address: Address, queue: Queue):
+        return Process(
+            name=repr(address),
+            target=_start_worker,
+            args=(address, self.info, self.peer_id, queue),
+        )
 
-        # Closing pipe signals to process to exit
-        if not proc.pipe_main.closed and not proc.pipe_proc.closed:
-            proc.pipe_main.send(None)
-        proc.pipe_main.close()
-        proc.pipe_proc.close()
-        if proc.proc.is_alive():
-            proc.proc.join()
-        proc.proc.close()
-        proc.status = "dead"
+    def _check_processes(self, processes: list[Process]):
+        i = 0
+        while i < len(processes):
+            process = processes[i]
+            if not process.is_alive():
+                process.close()
+                processes.pop(i)
+                continue
+            i += 1
 
-    def _can_continue(self):
-        if len(self._blocks) >= self._num_blocks:
+        if len(processes) == 0:
+            raise RuntimeError("Processes died")
+
+    def _check_pieces(self):
+        for i, piece in enumerate(self.pieces):
+            if self.done_pieces[i]:
+                continue
+            if not self._is_piece_done(piece):
+                continue
+
+            self.done_pieces[i] = self.pieces[i]
+
+    def _is_piece_done(self, piece: PieceInfo) -> bool:
+        try:
+            stat = piece.file_path.stat()
+        except FileNotFoundError:
             return False
 
-        if not any(self._procs):
+        if stat.st_size < piece.length:
             return False
+        if stat.st_size > piece.length:
+            raise RuntimeError("File was too big")
+
+        with open(piece.file_path, "rb") as f:
+            hash = file_digest(f, "sha1").digest()
+
+        if hash != piece.hash:
+            raise RuntimeError("Hash did not match")
 
         return True
 
-    def download(self, output_file: Path):
-        try:
-            proc_idx = 0
-            while self._can_continue():
-                proc = self._procs[proc_idx]
-                proc_idx = (proc_idx + 1) % len(self._procs)
-                if proc.status == "uninit":
-                    self._handle_uninit(proc)
-                elif proc.status == "ready":
-                    self._handle_ready(proc)
-                elif proc.status == "working":
-                    self._handle_working(proc)
-
-        finally:
-            for proc in self._procs:
-                if proc.status != "dead":
-                    self._end_proc(proc)
-
-        if len(self._blocks) < self._num_blocks:
-            for err in self._errors:
-                print(f"ERROR: {err}")
-            raise RuntimeError("Failed to download all blocks")
-
-        self._blocks.sort(key=lambda p: p.begin)
-        with open(output_file, "wb") as f:
-            for block in self._blocks:
-                f.write(block.block)
+    def _combine_file(self, output_file: Path):
+        with open(output_file, "wb") as fo:
+            for piece in self.done_pieces:
+                with open(piece.file_path, "rb") as fi:
+                    copyfileobj(fi, fo)
+                piece.file_path.unlink()
 
 
-def _start_conn(
-    address: Address,
-    meta_info: MetaInfo,
-    peer_id: bytes,
-    pipe_main: Connection,
-    pipe_proc: Connection,
-):
-    error: Exception | None = None
+def _start_worker(address: Address, info: MetaInfo, peer_id: bytes, queue: Queue):
+    piece: PieceInfo | None = None
     try:
-        with PeerConnection(address, meta_info, peer_id) as conn:
+        with PeerConnection(address, info, peer_id) as conn:
             while True:
-                requests = cast(list[RequestMsg] | None, pipe_proc.recv())
-                if not requests:
+                piece = cast(PieceInfo | None, queue.get())
+                if not piece:
                     return
-
-                pieces = conn.get_blocks(requests)
-                pipe_proc.send(pieces)
-    except (EOFError, ConnectionError) as exc:
-        error = exc
+                _fetch_piece(conn, piece)
+                piece = None
+    except (ValueError, ConnectionError):
+        pass
     finally:
-        if not pipe_main.closed and not pipe_proc.closed:
-            pipe_proc.send(error)
-        pipe_main.close()
-        pipe_proc.close()
+        if piece:
+            queue.put_nowait(piece)
+
+
+def _fetch_piece(conn: PeerConnection, piece: PieceInfo):
+    requests = piece.get_requests(16 * 1024)
+    blocks = chain.from_iterable(map(conn.get_blocks, batched(requests, 5)))
+    with open(piece.file_path, "wb") as f:
+        for block in blocks:
+            f.write(block.block)

@@ -6,9 +6,9 @@ from typing import Literal, TypedDict, cast
 
 from app.bittorrent_proto import PeerConnection
 from app.communication import Address
-from app.metainfo import MetaInfoFile
+from app.metainfo import MetaInfo, MetaInfoFile
 from app.bencoding import decode_bencode
-from app.requests import download_piece, fetch_peers
+from app.requests import download, download_piece, fetch_peers
 
 PEER_ID = b"00112233445566778899"
 
@@ -41,7 +41,15 @@ class DownloadPieceArgs(TypedDict):
     output: str | None
 
 
-Args = DecodeArgs | InfoArgs | PeersArgs | HandshakeArgs | DownloadPieceArgs
+class DownloadArgs(TypedDict):
+    command: Literal["download"]
+    torrent_file: str
+    output: str | None
+
+
+Args = (
+    DecodeArgs | InfoArgs | PeersArgs | HandshakeArgs | DownloadPieceArgs | DownloadArgs
+)
 
 
 def parse_args(
@@ -62,10 +70,23 @@ def parse_args(
     download_piece.add_argument("torrent_file", type=str)
     download_piece.add_argument("index", type=int)
     download_piece.add_argument("-o", "--output", type=str)
+    download_piece = cmds.add_parser("download")
+    download_piece.add_argument("torrent_file", type=str)
+    download_piece.add_argument("-o", "--output", type=str)
 
     ns = parser.parse_args(args)
     args = {k: v for k, v in ns._get_kwargs()}
     return cast(Args, args)
+
+
+def get_output_file(info: MetaInfo, arg: str | None):
+    if not arg:
+        return Path(info.name).resolve()
+
+    output = Path(arg).resolve()
+    if output.is_dir():
+        output /= info.name
+    return output
 
 
 def main():
@@ -103,10 +124,12 @@ def main():
     elif args["command"] == "handshake":
         meta_info_file = MetaInfoFile.from_file(args["torrent_file"])
         address = Address.from_str(args["peer_ip_port"])
-        info_hash = meta_info_file.info.get_info_hash()
 
         result = PeerConnection(
-            address, meta_info_file.info, PEER_ID, only_handshake=True
+            address,
+            meta_info_file.info,
+            PEER_ID,
+            only_handshake=True,
         )
         print(f"Peer ID: {result.handshake.peer_id.hex()}")
     elif args["command"] == "download_piece":
@@ -116,13 +139,22 @@ def main():
 
         peers = fetch_peers(PEER_ID, meta_info_file)
         address = peers.addresses[1]
-        info_hash = meta_info_file.info.get_info_hash()
-        meta_info_file.info.piece_length
         download_piece(
             peer_id=PEER_ID,
             addresses=peers.addresses,
-            meta_info=meta_info_file.info,
+            info=meta_info_file.info,
             index=index,
+            output_file=output_file,
+        )
+    elif args["command"] == "download":
+        meta_info_file = MetaInfoFile.from_file(args["torrent_file"])
+        output_file = get_output_file(meta_info_file.info, args["output"])
+
+        peers = fetch_peers(PEER_ID, meta_info_file)
+        download(
+            peer_id=PEER_ID,
+            addresses=peers.addresses,
+            info=meta_info_file.info,
             output_file=output_file,
         )
     else:
