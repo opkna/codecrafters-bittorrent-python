@@ -2,7 +2,7 @@ from contextlib import contextmanager
 from io import BufferedRWPair
 from socket import AddressFamily, SocketKind, socket
 from struct import iter_unpack
-from typing import Any, Generator
+from typing import Generator
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen

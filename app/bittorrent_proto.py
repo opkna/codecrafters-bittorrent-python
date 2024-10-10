@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from io import BufferedRWPair, BufferedReader, BufferedWriter
+from io import BufferedReader, BufferedRWPair, BufferedWriter
 from socket import AddressFamily, SocketKind, socket
 from struct import pack, unpack
 from typing import ContextManager, Self, overload, override

@@ -4,13 +4,14 @@ from pathlib import Path
 from sys import argv
 from typing import Literal, TypedDict, cast
 
+from app.bencoding import decode_bencode
 from app.bittorrent_proto import PeerConnection
 from app.communication import Address
+from app.magnet_links import parse_magnet_link
 from app.metainfo import MetaInfo, MetaInfoFile
-from app.bencoding import decode_bencode
 from app.requests import download, download_piece, fetch_peers
 
-PEER_ID = b"00112233445566778899"
+PEER_ID = b"992277445566338811"
 
 
 class DecodeArgs(TypedDict):
@@ -47,32 +48,50 @@ class DownloadArgs(TypedDict):
     output: str | None
 
 
+class MagnetParseArgs(TypedDict):
+    command: Literal["magnet_parse"]
+    magnet_link: str
+
+
 Args = (
-    DecodeArgs | InfoArgs | PeersArgs | HandshakeArgs | DownloadPieceArgs | DownloadArgs
+    DecodeArgs
+    | InfoArgs
+    | PeersArgs
+    | HandshakeArgs
+    | DownloadPieceArgs
+    | DownloadArgs
+    | MagnetParseArgs
 )
 
 
-def parse_args(
-    args: list[str],
-) -> Args:
-    parser = ArgumentParser("my_bittorrent")
+def parse_args(args: list[str]) -> Args:
+    parser = ArgumentParser("your_bittorrent")
     cmds = parser.add_subparsers(dest="command", required=True)
+    # Decode
     decode = cmds.add_parser("decode")
     decode.add_argument("bencoded_string", type=str)
+    # Info
     info = cmds.add_parser("info")
     info.add_argument("torrent_file", type=str)
+    # Peers
     peers = cmds.add_parser("peers")
     peers.add_argument("torrent_file", type=str)
+    # Handshake
     handshake = cmds.add_parser("handshake")
     handshake.add_argument("torrent_file", type=str)
     handshake.add_argument("peer_ip_port", type=str)
+    # Download piece
     download_piece = cmds.add_parser("download_piece")
     download_piece.add_argument("torrent_file", type=str)
     download_piece.add_argument("index", type=int)
     download_piece.add_argument("-o", "--output", type=str)
+    # Download
     download_piece = cmds.add_parser("download")
     download_piece.add_argument("torrent_file", type=str)
     download_piece.add_argument("-o", "--output", type=str)
+    # Magnet parse
+    download_piece = cmds.add_parser("magnet_parse")
+    download_piece.add_argument("magnet_link", type=str)
 
     ns = parser.parse_args(args)
     args = {k: v for k, v in ns._get_kwargs()}
@@ -94,10 +113,6 @@ def main():
     if args["command"] == "decode":
         bencoded_value = args["bencoded_string"].encode()
 
-        # json.dumps() can't handle bytes, but bencoded "strings" need to be
-        # bytestrings since they might contain non utf-8 characters.
-        #
-        # Let's convert them to strings for printing to the console.
         def bytes_to_str(data):
             if isinstance(data, bytes):
                 return data.decode()
@@ -157,6 +172,10 @@ def main():
             info=meta_info_file.info,
             output_file=output_file,
         )
+    elif args["command"] == "magnet_parse":
+        magnet_link = parse_magnet_link(args["magnet_link"])
+        print(f"Tracker URL: {magnet_link.announce}")
+        print(f"Info Hash: {magnet_link.hash.hex()}")
     else:
         raise NotImplementedError(f"Unknown command {args['command']}")
 
