@@ -18,7 +18,7 @@ from app.metainfo import MetaInfo, MetaInfoFile
 class PeersResponse:
     def __init__(self, data: bytes) -> None:
         values = decode_bencode(data)
-        self.interval: int = values["interval"]
+        self.interval: int | None = values.get("interval")
         self.complete: int = values["complete"]
         self.incomplete: int = values["incomplete"]
         self.min_interval: int = values["min interval"]
