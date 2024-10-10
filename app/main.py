@@ -11,7 +11,7 @@ from app.magnet_links import parse_magnet_link
 from app.metainfo import MetaInfo, MetaInfoFile
 from app.requests import download, download_piece, fetch_peers
 
-PEER_ID = b"992277445566338811"
+PEER_ID = b"00112233445566778899"
 
 
 class DecodeArgs(TypedDict):
