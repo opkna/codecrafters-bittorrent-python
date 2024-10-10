@@ -18,6 +18,8 @@ from app.metainfo import MetaInfo, MetaInfoFile
 class PeersResponse:
     def __init__(self, data: bytes) -> None:
         values = decode_bencode(data)
+        print(values)
+        print(str(data, "utf-8"))
         self.interval: int | None = values.get("interval")
         self.complete: int | None = values.get("complete")
         self.incomplete: int | None = values.get("incomplete")
