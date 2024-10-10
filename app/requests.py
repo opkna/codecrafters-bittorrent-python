@@ -19,9 +19,9 @@ class PeersResponse:
     def __init__(self, data: bytes) -> None:
         values = decode_bencode(data)
         self.interval: int | None = values.get("interval")
-        self.complete: int = values["complete"]
-        self.incomplete: int = values["incomplete"]
-        self.min_interval: int = values["min interval"]
+        self.complete: int | None = values.get("complete")
+        self.incomplete: int | None = values.get("incomplete")
+        self.min_interval: int | None = values.get("min interval")
         self.addresses = list(Address.from_bytes_to_many(values["peers"]))
 
 
